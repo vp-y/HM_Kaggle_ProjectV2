@@ -295,22 +295,6 @@ def build_features(transactions, customers, articles, cutoff):
         weekend["weekend_items"] / weekend["total_days"].replace(0, np.nan)
     ).astype("float32")
 
-    # Recent channel preference versus historical channel preference.
-    recent_tx = tx[tx["t_dat"] > cutoff - pd.Timedelta(days=30)]
-    recent_channel = pd.crosstab(
-        recent_tx["customer_id"], recent_tx["sales_channel_id"]
-    )
-    recent_c1 = recent_channel[1] if 1 in recent_channel.columns else pd.Series(dtype="float32")
-    recent_c2 = recent_channel[2] if 2 in recent_channel.columns else pd.Series(dtype="float32")
-
-    recent_channel_total = (recent_c1.add(recent_c2, fill_value=0)).replace(0, np.nan)
-    recent_online_ratio = (recent_c2 / recent_channel_total)
-
-    f["recent_channel_2_ratio"] = recent_online_ratio.astype("float32")
-    f["channel_2_ratio_change"] = (
-        f["recent_channel_2_ratio"] - f["channel_2_ratio"]
-    ).astype("float32")
-
     # Lifecycle buckets represented numerically so tree models can split on them.
     f["recency_bucket"] = pd.cut(
         f["recency_days"],
@@ -336,6 +320,22 @@ def build_features(transactions, customers, articles, cutoff):
         f["channel_2_items"] = 0.0
     denom = (f["channel_1_items"] + f["channel_2_items"]).replace(0, np.nan)
     f["channel_2_ratio"] = (f["channel_2_items"] / denom).astype("float32")
+
+    # Recent channel preference versus historical channel preference.
+    recent_tx = tx[tx["t_dat"] > cutoff - pd.Timedelta(days=30)]
+    recent_channel = pd.crosstab(
+        recent_tx["customer_id"], recent_tx["sales_channel_id"]
+    )
+    recent_c1 = recent_channel[1] if 1 in recent_channel.columns else pd.Series(dtype="float32")
+    recent_c2 = recent_channel[2] if 2 in recent_channel.columns else pd.Series(dtype="float32")
+
+    recent_channel_total = (recent_c1.add(recent_c2, fill_value=0)).replace(0, np.nan)
+    recent_online_ratio = (recent_c2 / recent_channel_total)
+
+    f["recent_channel_2_ratio"] = recent_online_ratio.astype("float32")
+    f["channel_2_ratio_change"] = (
+        f["recent_channel_2_ratio"] - f["channel_2_ratio"]
+    ).astype("float32")
 
     # Product diversity. Merge only article attributes; images are never loaded.
     article_small = articles[[
