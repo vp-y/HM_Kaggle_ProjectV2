@@ -1,6 +1,12 @@
 from pathlib import Path
+import sys
 import json, time, warnings
+
 warnings.filterwarnings("ignore")
+
+# Add project root to Python path so config.py can be imported
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 import numpy as np
 import pandas as pd
@@ -29,7 +35,7 @@ from config import (
     RUN_MODELS, MAX_MODEL_ROWS_FAST, RUN_TUNING
 )
 
-ROOT = Path(__file__).resolve().parents[1]
+
 RESULTS = ROOT / "results"
 MODELS = ROOT / "models"
 RESULTS.mkdir(exist_ok=True)
