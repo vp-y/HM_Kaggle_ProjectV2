@@ -218,6 +218,112 @@ def build_features(transactions, customers, articles, cutoff):
     f["cutoff_quarter"] = cutoff.quarter
     f["cutoff_dayofweek"] = cutoff.dayofweek
 
+    # ============================================================
+    # Additional behavioral / trend features
+    # ============================================================
+
+    # Activity velocity and acceleration across nested windows.
+    f["items_7d_per_day"] = (f["items_7d"] / 7.0).astype("float32")
+    f["items_30d_per_day"] = (f["items_30d"] / 30.0).astype("float32")
+    f["items_90d_per_day"] = (f["items_90d"] / 90.0).astype("float32")
+
+    f["items_7d_vs_30d"] = (
+        f["items_7d"] / (f["items_30d"] / 4.2857).replace(0, np.nan)
+    ).astype("float32")
+    f["items_30d_vs_90d"] = (
+        f["items_30d"] / (f["items_90d"] / 3.0).replace(0, np.nan)
+    ).astype("float32")
+
+    f["spend_7d_per_day"] = (f["spend_7d"] / 7.0).astype("float32")
+    f["spend_30d_per_day"] = (f["spend_30d"] / 30.0).astype("float32")
+    f["spend_90d_per_day"] = (f["spend_90d"] / 90.0).astype("float32")
+
+    f["spend_7d_vs_30d"] = (
+        f["spend_7d"] / (f["spend_30d"] / 4.2857).replace(0, np.nan)
+    ).astype("float32")
+    f["spend_30d_vs_90d"] = (
+        f["spend_30d"] / (f["spend_90d"] / 3.0).replace(0, np.nan)
+    ).astype("float32")
+
+    # Activity-state indicators.
+    f["active_7d"] = (f["items_7d"].fillna(0) > 0).astype("int8")
+    f["active_30d"] = (f["items_30d"].fillna(0) > 0).astype("int8")
+    f["active_90d"] = (f["items_90d"].fillna(0) > 0).astype("int8")
+    f["recently_inactive"] = (
+        (f["items_90d"].fillna(0) > 0) &
+        (f["items_30d"].fillna(0) == 0)
+    ).astype("int8")
+
+    # Repeat-purchase / concentration proxies.
+    f["repeat_article_ratio"] = (
+        (f["total_items"] - f["unique_articles"]) /
+        f["total_items"].replace(0, np.nan)
+    ).clip(lower=0).astype("float32")
+
+    f["articles_per_purchase_day"] = (
+        f["unique_articles"] / f["purchase_days"].clip(lower=1)
+    ).astype("float32")
+
+    f["purchase_days_share_30d"] = (
+        f["purchase_days_30d"] / f["purchase_days"].replace(0, np.nan)
+    ).astype("float32")
+
+    # Price sensitivity / spending behavior.
+    f["price_cv"] = (
+        f["price_std"] / f["avg_price"].replace(0, np.nan)
+    ).astype("float32")
+
+    f["recent_spend_per_item"] = (
+        f["spend_30d"] / f["items_30d"].replace(0, np.nan)
+    ).astype("float32")
+
+    f["historical_spend_per_item"] = (
+        f["total_spend"] / f["total_items"].replace(0, np.nan)
+    ).astype("float32")
+
+    f["recent_price_change_ratio"] = (
+        f["avg_price_30d"] / f["avg_price"].replace(0, np.nan) - 1.0
+    ).astype("float32")
+
+    # Weekend behavior from the historical transactions available at cutoff.
+    tx_day = tx.assign(_dow=tx["t_dat"].dt.dayofweek)
+    weekend = tx_day.groupby("customer_id")["_dow"].agg(
+        weekend_items=lambda s: (s >= 5).sum(),
+        total_days="size"
+    )
+    f["weekend_purchase_ratio"] = (
+        weekend["weekend_items"] / weekend["total_days"].replace(0, np.nan)
+    ).astype("float32")
+
+    # Recent channel preference versus historical channel preference.
+    recent_tx = tx[tx["t_dat"] > cutoff - pd.Timedelta(days=30)]
+    recent_channel = pd.crosstab(
+        recent_tx["customer_id"], recent_tx["sales_channel_id"]
+    )
+    recent_c1 = recent_channel[1] if 1 in recent_channel.columns else pd.Series(dtype="float32")
+    recent_c2 = recent_channel[2] if 2 in recent_channel.columns else pd.Series(dtype="float32")
+
+    recent_channel_total = (recent_c1.add(recent_c2, fill_value=0)).replace(0, np.nan)
+    recent_online_ratio = (recent_c2 / recent_channel_total)
+
+    f["recent_channel_2_ratio"] = recent_online_ratio.astype("float32")
+    f["channel_2_ratio_change"] = (
+        f["recent_channel_2_ratio"] - f["channel_2_ratio"]
+    ).astype("float32")
+
+    # Lifecycle buckets represented numerically so tree models can split on them.
+    f["recency_bucket"] = pd.cut(
+        f["recency_days"],
+        bins=[-np.inf, 7, 30, 90, 180, np.inf],
+        labels=False
+    ).astype("float32")
+
+    f["tenure_bucket"] = pd.cut(
+        f["customer_tenure_days"],
+        bins=[-np.inf, 30, 90, 180, 365, 730, np.inf],
+        labels=False
+    ).astype("float32")
+
     # Channel behavior.
     channel = pd.crosstab(tx["customer_id"], tx["sales_channel_id"])
     if 1 in channel.columns:
@@ -404,6 +510,10 @@ def run():
     Xv_fit, yv_fit, _ = sample_for_speed(Xv, yv, idv)
     print("Model rows:", len(Xtr_fit), "train /", len(Xv_fit), "validation")
 
+    print("Feature count:", Xtr_fit.shape[1])
+    print("Numeric features:", Xtr_fit.select_dtypes(include=np.number).shape[1])
+    print("Categorical features:", Xtr_fit.select_dtypes(exclude=np.number).shape[1])
+
     preprocessor = make_preprocessor(Xtr_fit)
     models = get_models(ytr_fit)
 
@@ -479,9 +589,10 @@ def run():
     # Final test: only the selected best model and the threshold chosen on validation.
     best_name = best["model"]
     best_pipe = fitted[best_name]
-    # IMPORTANT: sample X, y, and IDs with the exact same positional indices.
-    # Never reconstruct X afterward with index filtering, because that can
-    # reorder rows and silently misalign features with labels.
+    test_sample = Xte
+    ytest_sample = yte
+    idtest_sample = idte
+
     if FAST_MODE and len(Xte) > MAX_MODEL_ROWS_FAST:
         rng = np.random.RandomState(RANDOM_STATE)
         test_idx = rng.choice(
@@ -489,29 +600,26 @@ def run():
             size=MAX_MODEL_ROWS_FAST,
             replace=False
         )
+
+        # CRITICAL: X, y, and IDs use the exact same positional indices.
         test_sample = Xte.iloc[test_idx].copy()
         ytest_sample = yte.iloc[test_idx].copy()
         idtest_sample = idte.iloc[test_idx].copy()
-    else:
-        test_sample = Xte.copy()
-        ytest_sample = yte.copy()
-        idtest_sample = idte.copy()
 
-    # Hard safety checks: prediction rows must correspond exactly to labels.
+    # Hard guards against the X/y misalignment bug encountered previously.
     assert len(test_sample) == len(ytest_sample) == len(idtest_sample)
     assert test_sample.index.equals(ytest_sample.index)
     assert test_sample.index.equals(idtest_sample.index)
 
-    threshold = float(best["threshold"])
     print("Test rows:", len(test_sample))
     print("Test positive rate:", float(ytest_sample.mean()))
+
+    threshold = float(best["threshold"])
     p_test = best_pipe.predict_proba(test_sample)[:, 1]
 
-    # Sanity checks for a valid probability evaluation.
     assert len(p_test) == len(ytest_sample)
     assert np.isfinite(p_test).all()
     assert ((p_test >= 0) & (p_test <= 1)).all()
-
     test_m = metrics(ytest_sample, p_test, threshold)
 
     test_row = pd.DataFrame([{
