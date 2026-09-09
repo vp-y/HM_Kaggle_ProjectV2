@@ -465,12 +465,18 @@ def get_models(y):
     }
     if XGB_AVAILABLE:
         models["xgboost"] = XGBClassifier(
-            n_estimators=300 if FAST_MODE else 600,
-            max_depth=5, learning_rate=0.05,
-            subsample=0.85, colsample_bytree=0.85,
-            min_child_weight=10, reg_lambda=2, reg_alpha=0.1,
-            objective="binary:logistic", eval_metric="logloss",
-            tree_method="hist", n_jobs=-1,
+            n_estimators=400,
+            max_depth=4,
+            learning_rate=0.03,
+            subsample=0.90,
+            colsample_bytree=0.85,
+            min_child_weight=15,
+            reg_lambda=4.0,
+            reg_alpha=0.2,
+            objective="binary:logistic",
+            eval_metric="logloss",
+            tree_method="hist",
+            n_jobs=-1,
             scale_pos_weight=scale,
             random_state=RANDOM_STATE
         )
