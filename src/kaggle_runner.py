@@ -479,16 +479,39 @@ def run():
     # Final test: only the selected best model and the threshold chosen on validation.
     best_name = best["model"]
     best_pipe = fitted[best_name]
-    test_sample = Xte
-    ytest_sample = yte
-    idtest_sample = idte
+    # IMPORTANT: sample X, y, and IDs with the exact same positional indices.
+    # Never reconstruct X afterward with index filtering, because that can
+    # reorder rows and silently misalign features with labels.
     if FAST_MODE and len(Xte) > MAX_MODEL_ROWS_FAST:
-        _, ytest_sample, idtest_sample = sample_for_speed(Xte, yte, idte)
-        # Reproduce the same sampled rows using the returned IDs.
-        test_sample = Xte[Xte.index.isin(idtest_sample.index)].copy()
+        rng = np.random.RandomState(RANDOM_STATE)
+        test_idx = rng.choice(
+            len(Xte),
+            size=MAX_MODEL_ROWS_FAST,
+            replace=False
+        )
+        test_sample = Xte.iloc[test_idx].copy()
+        ytest_sample = yte.iloc[test_idx].copy()
+        idtest_sample = idte.iloc[test_idx].copy()
+    else:
+        test_sample = Xte.copy()
+        ytest_sample = yte.copy()
+        idtest_sample = idte.copy()
+
+    # Hard safety checks: prediction rows must correspond exactly to labels.
+    assert len(test_sample) == len(ytest_sample) == len(idtest_sample)
+    assert test_sample.index.equals(ytest_sample.index)
+    assert test_sample.index.equals(idtest_sample.index)
 
     threshold = float(best["threshold"])
+    print("Test rows:", len(test_sample))
+    print("Test positive rate:", float(ytest_sample.mean()))
     p_test = best_pipe.predict_proba(test_sample)[:, 1]
+
+    # Sanity checks for a valid probability evaluation.
+    assert len(p_test) == len(ytest_sample)
+    assert np.isfinite(p_test).all()
+    assert ((p_test >= 0) & (p_test <= 1)).all()
+
     test_m = metrics(ytest_sample, p_test, threshold)
 
     test_row = pd.DataFrame([{
